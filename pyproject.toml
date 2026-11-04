@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "atomview"
+version = "0.2.0"
+description = "Free, open-source visualization and analysis of atomistic simulations (LAMMPS, VASP, XYZ, …)"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.10"
+dependencies = [
+  "numpy", "scipy", "matplotlib", "PySide6", "pyvista", "pyvistaqt", "vtk",
+  "freud-analysis", "ase", "imageio", "imageio-ffmpeg", "h5py", "chemfiles",
+]
+
+[project.optional-dependencies]
+test = ["pytest"]
+
+[project.scripts]
+atomview = "atomview.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["atomview*"]
+
+[tool.setuptools.package-data]
+atomview = ["resources/*.png"]

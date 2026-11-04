@@ -1,0 +1,3 @@
+recursive-include atomview/_ptm *.cpp *.h LICENSE_PTM
+include THIRD_PARTY_NOTICES.md
+recursive-include atomview/resources *.png

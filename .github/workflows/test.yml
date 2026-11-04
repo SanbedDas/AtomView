@@ -1,0 +1,36 @@
+name: tests
+on: [push, pull_request]
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: OSMesa for headless rendering (Ubuntu)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libosmesa6 libgl1 libegl1 libxcb-cursor0
+      - name: Software OpenGL (Windows)
+        if: runner.os == 'Windows'
+        uses: pyvista/setup-headless-display-action@v3
+      - run: pip install -e .[test]
+      - run: python examples/make_samples.py
+      - run: python -m pytest -q tests
+      - name: Batch render, serial and parallel (headless on Linux)
+        shell: bash
+        run: |
+          unset DISPLAY
+          python -m atomview batch examples -o batch_out --size 400x300
+          ls batch_out
+          CLI="python -m atomview"
+          for i in 1 2 3; do mkdir -p tree/run$i && cp examples/data/cu_void.dump tree/run$i/; done
+          mkdir -p tree/snaps && for i in $(seq 0 9); do cp examples/data/fe_bcc.xyz tree/snaps/snap_$i.xyz; done
+          $CLI batch tree -o par --pattern "*.dump,*.xyz" --files all --frames every5 -j 2 --size 300x200 | tee out1.txt
+          grep -q "^14 image(s) written, 0 up to date, 0 failed" out1.txt
+          $CLI batch tree -o par --pattern "*.dump,*.xyz" --files all --frames every5 -j 2 --size 300x200 --skip-existing | tee out2.txt
+          grep -q "^0 image(s) written, 14 up to date, 0 failed" out2.txt

@@ -1,0 +1,93 @@
+name: build
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+permissions:
+  contents: write   # create the release and attach the builds
+jobs:
+  bundle:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: System libraries (Ubuntu)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libosmesa6 libgl1 libegl1 libxcb-cursor0 desktop-file-utils shared-mime-info
+      - name: Software OpenGL (Windows)
+        if: runner.os == 'Windows'
+        uses: pyvista/setup-headless-display-action@v3
+      - run: pip install -e . pyinstaller
+      - run: python examples/make_samples.py
+      - name: Build
+        working-directory: packaging
+        run: pyinstaller atomview.spec --noconfirm --distpath ../dist --workpath ../build/pyi
+      - name: Test the frozen command line
+        shell: bash
+        run: |
+          unset DISPLAY
+          CLI=dist/AtomView/atomview-cli
+          $CLI info examples/data/cu_void.dump
+          $CLI render examples/data/fe_bcc.xyz -o frozen.png --size 400x300
+          $CLI batch examples -o frozen_batch --size 300x200
+          test -s frozen.png && ls frozen_batch
+          for i in 1 2 3; do mkdir -p tree/run$i && cp examples/data/cu_void.dump tree/run$i/; done
+          mkdir -p tree/snaps && for i in $(seq 0 9); do cp examples/data/fe_bcc.xyz tree/snaps/snap_$i.xyz; done
+          $CLI batch tree -o par --pattern "*.dump,*.xyz" --files all --frames every5 -j 2 --size 300x200 | tee out1.txt
+          grep -q "^14 image(s) written, 0 up to date, 0 failed" out1.txt
+          $CLI batch tree -o par --pattern "*.dump,*.xyz" --files all --frames every5 -j 2 --size 300x200 --skip-existing | tee out2.txt
+          grep -q "^0 image(s) written, 14 up to date, 0 failed" out2.txt
+      - name: App registration (macOS)
+        if: runner.os == 'macOS'
+        run: plutil -p dist/AtomView.app/Contents/Info.plist | grep -q org.atomview.session
+      - name: Installer, then install it silently and check (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $iscc = (Get-Command iscc -ErrorAction SilentlyContinue).Source
+          if (-not $iscc) { $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" }
+          if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress; $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" }
+          $v = $env:GITHUB_REF_NAME -replace '/', '-'
+          & $iscc "/DVersion=$v" packaging\atomview.iss
+          if ($LASTEXITCODE) { exit 1 }
+          Start-Process -Wait -FilePath (Get-Item "AtomView-*-windows-setup.exe").FullName -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/CURRENTUSER', '/NORESTART'
+          $app = "$env:LOCALAPPDATA\Programs\AtomView"
+          if (-not (Test-Path "$app\AtomView.exe")) { throw "not installed" }
+          if ((Get-ItemProperty 'HKCU:\Software\Classes\.atomview').'(default)' -ne 'AtomView.Session') { throw "no .atomview association" }
+          & "$app\atomview-cli.exe" info examples\data\cu_void.dump
+      - name: Desktop entry (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          cp packaging/linux/install.sh dist/AtomView/
+          export HOME=$(mktemp -d)
+          dist/AtomView/install.sh
+          desktop-file-validate $HOME/.local/share/applications/atomview.desktop
+          test -s $HOME/.local/share/icons/hicolor/256x256/apps/atomview.png
+          grep -q atomview $HOME/.local/share/mime/globs2
+      - name: Package
+        shell: bash
+        run: |
+          V=${GITHUB_REF_NAME//\//-}
+          cp -R matlab dist/AtomView/matlab   # MATLAB toolbox next to atomview-cli
+          case "$RUNNER_OS" in
+            macOS)   mkdir -p pkg && cp -R dist/AtomView.app matlab pkg/ && (cd pkg && ditto -c -k --keepParent . ../AtomView-$V-macos.zip) ;;
+            Windows) (cd dist && 7z a ../AtomView-$V-windows.zip AtomView > /dev/null) ;;
+            Linux)   tar -czf AtomView-$V-linux.tar.gz -C dist AtomView ;;
+          esac
+          ls -la AtomView-*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AtomView-${{ runner.os }}
+          path: AtomView-*
+      - name: Attach to release (tags only)
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 || gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes "AtomView $GITHUB_REF_NAME"; gh release upload "$GITHUB_REF_NAME" AtomView-* --clobber
